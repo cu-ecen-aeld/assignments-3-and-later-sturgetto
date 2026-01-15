@@ -16,8 +16,10 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
-    return true;
+    if (system(cmd) < 0)
+        return false;
+    else
+        return true;
 }
 
 /**
@@ -36,6 +38,7 @@ bool do_system(const char *cmd)
 
 bool do_exec(int count, ...)
 {
+    pid_t pid;
     va_list args;
     va_start(args, count);
     char * command[count+1];
@@ -48,6 +51,8 @@ bool do_exec(int count, ...)
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
     command[count] = command[count];
+
+    va_end(args);
 
 /*
  * TODO:
@@ -58,10 +63,39 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    pid = fork();
 
-    va_end(args);
+    if (pid < 0)
+    {
+        return false;
+    }
+    else if (pid == 0)
+    {
+        int status = execv(command[0], command);
+        if (status == -1)
+       	{
+            _exit(EXIT_FAILURE);
+        }
+	return false;
+    }
+    else 
+    {
+        int status;
+        if (wait(&status) == -1) 
+	{
+            exit(EXIT_FAILURE);
+        }
+        if (WIFEXITED(status))
+        {
+	    if (WEXITSTATUS(status) == 0)
+            {
+                return true;
+            }
+        }
 
-    return true;
+        return false;
+    }
+
 }
 
 /**
@@ -71,6 +105,8 @@ bool do_exec(int count, ...)
 */
 bool do_exec_redirect(const char *outputfile, int count, ...)
 {
+    pid_t pid;
+    int fd;
     va_list args;
     va_start(args, count);
     char * command[count+1];
@@ -80,10 +116,8 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
 
+    va_end(args);
 
 /*
  * TODO
@@ -93,7 +127,49 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *
 */
 
-    va_end(args);
+    fd = open("testfile.txt", O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if (fd < 0)
+    {
+        return false;
+    }
+    pid = fork();
 
-    return true;
+    if (pid < 0)
+    {
+        return false;
+    }
+    else if (pid == 0)
+    {
+        int status;
+        if (dup2(fd, 1) < 0)
+        { 
+            exit(EXIT_FAILURE);
+        }
+        status = execv(command[0], command);
+	close(fd);
+        if (status == -1)
+       	{
+            _exit(EXIT_FAILURE);
+        }
+	return false;
+    }
+    else 
+    {
+        int status;
+	close(fd);
+        if (wait(&status) == -1) 
+	{
+            exit(EXIT_FAILURE);
+        }
+        if (WIFEXITED(status))
+        {
+	    if (WEXITSTATUS(status) == 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 }
