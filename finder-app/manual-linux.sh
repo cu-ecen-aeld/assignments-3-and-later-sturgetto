@@ -37,7 +37,7 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     git checkout ${KERNEL_VERSION}
 
     # TODO: Add your kernel build steps here
-    #make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
@@ -45,7 +45,7 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
 fi
 
 echo "Adding the Image in outdir"
-cp arch/arm64/boot/Image ${OUTDIR}
+cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}
 
 echo "Creating the staging directory for the root filesystem"
 cd "$OUTDIR"
@@ -63,18 +63,19 @@ mkdir -p usr/bin usr/lib usr/sbin
 mkdir -p var/log
 
 cd "$OUTDIR"
-if [ ! -d "${OUTDIR}/busybox-${BUSYBOX_VERSION}" ]
+if [ ! -d "${OUTDIR}/busybox" ]
 then
-#git clone git://busybox.net/busybox.git
-    curl https://git.busybox.net/busybox/snapshot/busybox-${BUSYBOX_VERSION}.tar.bz2 --output busybox-${BUSYBOX_VERSION}.tar.bz2
-    tar xjf busybox-${BUSYBOX_VERSION}.tar.bz2
-    cd busybox-${BUSYBOX_VERSION}
+    #git clone git://busybox.net/busybox.git
     #git checkout ${BUSYBOX_VERSION}
+    git clone --depth=1 --branch ${BUSYBOX_VERSION} git://busybox.net/busybox.git
+    #curl https://git.busybox.net/busybox/snapshot/busybox-${BUSYBOX_VERSION}.tar.bz2 --output busybox-${BUSYBOX_VERSION}.tar.bz2
+    #tar xjf busybox-${BUSYBOX_VERSION}.tar.bz2
+    cd busybox
     # TODO:  Configure busybox
     make distclean
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
 else
-    cd busybox-${BUSYBOX_VERSION}
+    cd busybox
 fi
 
 # TODO: Make and install busybox
@@ -86,10 +87,12 @@ ${CROSS_COMPILE}readelf -a busybox | grep "program interpreter"
 ${CROSS_COMPILE}readelf -a busybox | grep "Shared library"
 
 # TODO: Add library dependencies to rootfs
-cp /usr/local/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc/lib/ld-linux-aarch64.so.1 ${OUTDIR}/rootfs/lib/
-cp /usr/local/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc/lib64/libm.so.6 ${OUTDIR}/rootfs/lib64/
-cp /usr/local/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc/lib64/libresolv.so.2 ${OUTDIR}/rootfs/lib64/
-cp /usr/local/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc/lib64/libc.so.6 ${OUTDIR}/rootfs/lib64/
+CCPATH=$(dirname $(which ${CROSS_COMPILE}readelf))
+
+cp ${CCPATH}/../aarch64-none-linux-gnu/libc/lib/ld-linux-aarch64.so.1 ${OUTDIR}/rootfs/lib/
+cp ${CCPATH}/../aarch64-none-linux-gnu/libc/lib64/libm.so.6 ${OUTDIR}/rootfs/lib64/
+cp ${CCPATH}/../aarch64-none-linux-gnu/libc/lib64/libresolv.so.2 ${OUTDIR}/rootfs/lib64/
+cp ${CCPATH}/../aarch64-none-linux-gnu/libc/lib64/libc.so.6 ${OUTDIR}/rootfs/lib64/
 
 # TODO: Make device nodes
 sudo mknod ${OUTDIR}/rootfs/dev/null c 1 3
