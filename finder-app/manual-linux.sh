@@ -65,8 +65,8 @@ mkdir -p var/log
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/busybox" ]
 then
-    # git clone git://busybox.net/busybox.git
-    # git checkout ${BUSYBOX_VERSION}
+    #git clone git://busybox.net/busybox.git
+    #git checkout ${BUSYBOX_VERSION}
     git clone --depth=1 --branch ${BUSYBOX_VERSION} git://busybox.net/busybox.git
     #curl https://git.busybox.net/busybox/snapshot/busybox-${BUSYBOX_VERSION}.tar.bz2 --output busybox-${BUSYBOX_VERSION}.tar.bz2
     #tar xjf busybox-${BUSYBOX_VERSION}.tar.bz2
