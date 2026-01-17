@@ -12,6 +12,8 @@ BUSYBOX_VERSION=1_33_1
 FINDER_APP_DIR=$(realpath $(dirname $0))
 ARCH=arm64
 CROSS_COMPILE=aarch64-none-linux-gnu-
+SCRIPT_PATH="$(readlink -f "$0")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 
 if [ $# -lt 1 ]
 then
@@ -35,6 +37,11 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     git checkout ${KERNEL_VERSION}
 
     # TODO: Add your kernel build steps here
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
 fi
 
 echo "Adding the Image in outdir"
@@ -48,33 +55,68 @@ then
 fi
 
 # TODO: Create necessary base directories
+mkdir ${OUTDIR}/rootfs
+cd ${OUTDIR}/rootfs
+mkdir -p bin dev etc home lib lib64 proc sbin sys tmp usr var
+mkdir -p usr/bin usr/lib usr/sbin
+mkdir -p var/log
 
 cd "$OUTDIR"
-if [ ! -d "${OUTDIR}/busybox" ]
+if [ ! -d "${OUTDIR}/busybox-${BUSYBOX_VERSION}" ]
 then
-git clone git://busybox.net/busybox.git
-    cd busybox
-    git checkout ${BUSYBOX_VERSION}
+#git clone git://busybox.net/busybox.git
+    curl https://git.busybox.net/busybox/snapshot/busybox-${BUSYBOX_VERSION}.tar.bz2 --output busybox-${BUSYBOX_VERSION}.tar.bz2
+    tar xjf busybox-${BUSYBOX_VERSION}.tar.bz2
+    cd busybox-${BUSYBOX_VERSION}
+    #git checkout ${BUSYBOX_VERSION}
     # TODO:  Configure busybox
+    make distclean
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
 else
-    cd busybox
+    cd busybox-${BUSYBOX_VERSION}
 fi
 
 # TODO: Make and install busybox
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
+make CONFIG_PREFIX=${OUTDIR}/rootfs ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
 
 echo "Library dependencies"
-${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter"
-${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
+${CROSS_COMPILE}readelf -a busybox | grep "program interpreter"
+${CROSS_COMPILE}readelf -a busybox | grep "Shared library"
 
 # TODO: Add library dependencies to rootfs
+cp /usr/local/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc/lib/ld-linux-aarch64.so.1 ${OUTDIR}/rootfs/lib/
+cp /usr/local/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc/lib64/libm.so.6 ${OUTDIR}/rootfs/lib64/
+cp /usr/local/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc/lib64/libresolv.so.2 ${OUTDIR}/rootfs/lib64/
+cp /usr/local/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu/libc/lib64/libc.so.6 ${OUTDIR}/rootfs/lib64/
 
 # TODO: Make device nodes
+sudo mknod ${OUTDIR}/rootfs/dev/null c 1 3
+sudo mknod ${OUTDIR}/rootfs/dev/console c 5 1
 
 # TODO: Clean and build the writer utility
+cd ${SCRIPT_DIR}
+make CROSS_COMPILE=${CROSS_COMPILE} clean
+make CROSS_COMPILE=${CROSS_COMPILE}
 
 # TODO: Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
+cp writer ${OUTDIR}/rootfs/home/
+cp autorun-qemu.sh ${OUTDIR}/rootfs/home/
+cp dependencies.sh ${OUTDIR}/rootfs/home/
+cp finder.sh ${OUTDIR}/rootfs/home/
+cp finder-test.sh ${OUTDIR}/rootfs/home/
+cp manual-linux.sh ${OUTDIR}/rootfs/home/
+cp start-qemu-app.sh ${OUTDIR}/rootfs/home/
+cp start-qemu-terminal.sh ${OUTDIR}/rootfs/home/
+mkdir ${OUTDIR}/rootfs/home/conf
+cp conf/username.txt ${OUTDIR}/rootfs/home/conf/
+cp conf/assignment.txt ${OUTDIR}/rootfs/home/conf/
 
 # TODO: Chown the root directory
+sudo chown -R root:root ${OUTDIR}/rootfs
 
 # TODO: Create initramfs.cpio.gz
+cd "${OUTDIR}/rootfs"
+find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
+gzip -f ${OUTDIR}/initramfs.cpio
