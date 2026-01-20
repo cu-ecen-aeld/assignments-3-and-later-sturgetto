@@ -21,5 +21,7 @@ $(TARGET): $(OBJ)
 clean:
 	rm -f $(OBJ) $(TARGET)
 
+all: $(TARGET)
+
 # Phony targets (not actual files)
 .PHONY: clean
