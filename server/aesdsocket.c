@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,10 +11,38 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <pthread.h>
 
 char buffer[2048];
 FILE * outfile = NULL;
+pthread_mutex_t iomtx;
 int sockfd = -1, peerfd = -1;
+timer_t gTimerid;
+
+void start_timer(void)
+{
+    struct itimerspec value;
+
+    value.it_value.tv_sec = 1;
+    value.it_value.tv_nsec = 0;
+
+    value.it_interval.tv_sec = 10;
+    value.it_interval.tv_nsec = 0;
+
+    timer_create (CLOCK_REALTIME, NULL, &gTimerid);
+
+    timer_settime (gTimerid, 0, &value, NULL);
+}
+
+typedef struct _thread_info
+{
+    pthread_t thread;
+    int peerfd;
+    bool finished;
+    struct _thread_info *next;
+} *pthread_info, thread_info;
+
+pthread_info thread_start = NULL, thread_end = NULL;
 
 static void handler(int signo)
 {
@@ -25,9 +54,111 @@ static void handler(int signo)
     exit(0);
 }
 
+void * aesdsocket_thread(void * arg)
+{
+    pthread_info pti = (pthread_info)arg;
+    int bytesrcvd = 0, retval;
+    // acquire mutex
+    pthread_mutex_lock(&iomtx);
+    // Open a file for append
+    outfile = fopen("/var/tmp/aesdsocketdata", "a");
+    if (outfile == NULL)
+    {
+        syslog(LOG_ERR, "Unable to open temp file for writing.");
+        close(pti->peerfd);
+	pti->finished = true;
+        // release mutex
+        pthread_mutex_unlock(&iomtx);
+        return NULL;
+    }
+    // receive data on the socker ans write to temp file.
+    do 
+    {
+        bytesrcvd = recv(pti->peerfd, buffer, 1024, 0);
+        retval = fwrite(buffer, 1, bytesrcvd, outfile);
+        if (retval != bytesrcvd)
+        {
+            syslog(LOG_ERR, "Unable to write all data to temp file.");
+            close(pti->peerfd);
+	    pti->finished = true;
+            // release mutex
+            pthread_mutex_unlock(&iomtx);
+            return NULL;
+        }
+    } while (bytesrcvd == 1024);
+    fclose(outfile);
+    outfile = NULL;
+    // Allow other threads to write to the file
+    // release mutex
+    pthread_mutex_unlock(&iomtx);
+
+    // Prevent other threads from writing while reading.
+    // acquire mutex
+    pthread_mutex_lock(&iomtx);
+    // Transmit file back out.
+    outfile = fopen("/var/tmp/aesdsocketdata", "r");
+    if (outfile == NULL)
+    {
+        syslog(LOG_ERR, "Unable to open temp file for reading.");
+        close(pti->peerfd);
+	pti->finished = true;
+        // release mutex
+        pthread_mutex_unlock(&iomtx);
+        return NULL;
+    }
+    do
+    {
+        bytesrcvd = fread(buffer, 1, 1024, outfile);
+        retval = send(pti->peerfd, buffer, bytesrcvd, 0);
+        if (retval != bytesrcvd)
+        {
+            syslog(LOG_ERR, "Unable to send all data.");
+            close(pti->peerfd);
+	    pti->finished = true;
+            // release mutex
+            pthread_mutex_unlock(&iomtx);
+            return NULL;
+        }
+    } while (bytesrcvd == 1024);
+    fclose(outfile);
+    outfile = NULL;
+    // release mutex
+    pthread_mutex_unlock(&iomtx);
+    close(pti->peerfd);
+    return NULL;
+}
+void timer_callback(int sig)
+{
+    time_t rawtime;
+    struct tm *timeinfo;
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
+
+    pthread_mutex_lock(&iomtx);
+    int length = strftime(buffer, sizeof(buffer), "timestamp:%a, %d %b %Y %T %z", timeinfo);
+    buffer[length] = '\n';
+    outfile = fopen("/var/tmp/aesdsocketdata", "a");
+    if (outfile == NULL)
+    {
+        syslog(LOG_ERR, "Unable to open temp file for writing.");
+        // release mutex
+        pthread_mutex_unlock(&iomtx);
+        return;
+    }
+    // receive data on the socker ans write to temp file.
+    int retval = fwrite(buffer, 1, length+1, outfile);
+    if (retval != length+1)
+    {
+        syslog(LOG_ERR, "Unable to write all data to temp file.");
+        // release mutex
+    }
+    fclose(outfile);
+    outfile = NULL;
+    pthread_mutex_unlock(&iomtx);
+}
+
 int main(int argc, char* argv[])
 {
-    int retval = 0;
     struct sockaddr_in addr;
     struct sockaddr_in addr_peer;
     socklen_t addrlen = 0;
@@ -66,6 +197,8 @@ int main(int argc, char* argv[])
         syslog(LOG_ERR, "Unable to register for SIGTERM.");
         return -1;
     }
+    signal(SIGALRM, timer_callback);
+    start_timer();
 
     // Create a TCP socket
     sockfd = socket(PF_INET, SOCK_STREAM, 0);
@@ -101,7 +234,7 @@ int main(int argc, char* argv[])
     }
 
     memset(&addr_peer, 0, sizeof(addr_peer));
-
+    pthread_mutex_init(&iomtx, NULL);
     while (1)
     {
 	// Accept connections to socket.
@@ -109,8 +242,7 @@ int main(int argc, char* argv[])
         if (peerfd < 0)
         {
             syslog(LOG_ERR, "Unable to accept connection on socket.");
-            close(sockfd);
-            return -1;
+            break;
         }
 
         char buf[INET_ADDRSTRLEN]; // >16 bytes
@@ -123,61 +255,63 @@ int main(int argc, char* argv[])
             syslog(LOG_ERR, "Invalid IPv4 address");
         }
 
+        pthread_info new_ti = malloc(sizeof(thread_info));
+	new_ti->peerfd = peerfd;
+	new_ti->finished = false;
+	new_ti->next = NULL;
 
-        int bytesrcvd = 0;
-        // Open a file for append
-        outfile = fopen("/var/tmp/aesdsocketdata", "a");
-        if (outfile == NULL)
+        if (pthread_create(&(new_ti->thread), NULL, aesdsocket_thread, (void*)new_ti) != 0)
 	{
-            syslog(LOG_ERR, "Unable to open temp file for writing.");
-            close(peerfd);
-            close(sockfd);
-            return -1;
+            syslog(LOG_ERR, "Unable to create thread for attached socket.");
+	    close(peerfd);
+	    break;
+        }
+	// Add the new thread to the tail.
+	if (thread_end == NULL)
+	{
+            thread_start = thread_end = new_ti;
 	}
-	// receive data on the socker ans write to temp file.
-        do 
+	else
 	{
-            bytesrcvd = recv(peerfd, buffer, 1024, 0);
-            retval = fwrite(buffer, 1, bytesrcvd, outfile);
-	    if (retval != bytesrcvd)
-	    {
-                syslog(LOG_ERR, "Unable to write all data to temp file.");
-                close(peerfd);
-                close(sockfd);
-                return -1;
-	    }
-	} while (bytesrcvd == 1024);
-	fclose(outfile);
-
-        outfile = NULL;
-	// Transmit file back out.
-        outfile = fopen("/var/tmp/aesdsocketdata", "r");
-	if (outfile == NULL)
-	{
-            syslog(LOG_ERR, "Unable to open temp file for reading.");
-            close(peerfd);
-            close(sockfd);
-            return -1;
+            thread_end->next = new_ti;
+            thread_end = new_ti;
 	}
-	do
-	{
-	    bytesrcvd = fread(buffer, 1, 1024, outfile);
-	    retval = send(peerfd, buffer, bytesrcvd, 0);
-	    if (retval != bytesrcvd)
-	    {
-                syslog(LOG_ERR, "Unable to send all data.");
-                close(peerfd);
-                close(sockfd);
-                return -1;
-	    }
 
-	} while (bytesrcvd == 1024);
-	fclose(outfile);
-	outfile = NULL;
-        close(peerfd);
-	peerfd = -1;
+        // Joined finished threads
+        pthread_info thread_cur, thread_prev;
+	thread_prev = NULL;
+	thread_cur = thread_start;
+	while (thread_cur != NULL)
+	{
+	    if (thread_cur->finished == true)
+	    {
+		if (thread_prev == NULL)
+		{
+		     thread_start = thread_cur->next;
+		     if (thread_start == NULL) thread_end = NULL;
+		}
+		else
+		{
+		     if (thread_cur->next == NULL)
+		     {
+			 thread_end = thread_prev;
+			 thread_prev->next = NULL;
+		     }
+		     else
+		     {
+			 thread_prev->next = thread_cur->next;
+		     }
+		}
+		void * retval;
+		pthread_join(thread_cur->thread, &retval);
+		free(thread_cur);
+	    }
+	    thread_prev = thread_cur;
+	    thread_cur = thread_cur->next;
+	}
     }
     close(sockfd);
+    pthread_mutex_destroy(&iomtx);
     sockfd = -1;
 
     return 0;

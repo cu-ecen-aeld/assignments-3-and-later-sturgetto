@@ -1,26 +1,22 @@
-# Compiler and flags
-CC = gcc
-CFLAGS = -Wall -Wextra -O2
+# Makefile for a simple Yocto cross compile example
+# NOTE: Do NOT manually set CC, CFLAGS, LDFLAGS within the Makefile 
+# unless you intend to override the SDK environment variables.
 
-# Target executable name
 TARGET = aesdsocket
-
-# Source files
+OBJS = aesdsocket.o
 SRC = aesdsocket.c
-OBJ = $(SRC:.c=.o)
 
-# Default rule: build the program
-$(TARGET): $(OBJ)
-	$(CROSS_COMPILE)$(CC) $(CFLAGS) -o $(TARGET) $(OBJ)
+# The CC, CFLAGS, etc. variables are provided by the sourced SDK environment script.
 
-# Rule to compile .c to .o
-%.o: %.c
-	$(CROSS_COMPILE)$(CC) $(CFLAGS) -c $< -o $@
+$(TARGET): $(OBJS)
+	$(CC) $(LDFLAGS) $(OBJS) -o $@
 
-# Clean up build files
+aesdoscket.o: aesdsocket.c
+	$(CC) $(CFLAGS) -c aesdsocket.c
+
 clean:
-	rm -f $(OBJ) $(TARGET)
-
+	rm -f $(OBJS) $(TARGET)
+	
 all: $(TARGET)
 
 # Phony targets (not actual files)
