@@ -12,13 +12,23 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <pthread.h>
+#include <fcntl.h>
+
+#ifndef USE_AESD_CHAR_DEVICE
+#define USE_AESD_CHAR_DEVICE 1
+#endif
 
 char buffer[2048];
+#ifdef USE_AESD_CHAR_DEVICE
+int outfile = -1;
+#else
 FILE * outfile = NULL;
+#endif
 pthread_mutex_t iomtx;
 int sockfd = -1, peerfd = -1;
 timer_t gTimerid;
 
+#ifndef USE_AESD_CHAR_DEVICE
 void start_timer(void)
 {
     struct itimerspec value;
@@ -33,6 +43,7 @@ void start_timer(void)
 
     timer_settime (gTimerid, 0, &value, NULL);
 }
+#endif
 
 typedef struct _thread_info
 {
@@ -48,7 +59,11 @@ static void handler(int signo)
 {
     if (sockfd != -1) close(sockfd);
     if (peerfd != -1) close(peerfd);
+#ifdef USE_AESD_CHAR_DEVICE
+    if (outfile != -1) close(outfile);
+#else
     if (outfile != NULL) fclose(outfile);
+#endif
     signo = signo;
     printf("Exiting...");
     exit(0);
@@ -60,13 +75,18 @@ void * aesdsocket_thread(void * arg)
     int bytesrcvd = 0, retval;
     // acquire mutex
     pthread_mutex_lock(&iomtx);
+#ifdef USE_AESD_CHAR_DEVICE
     // Open a file for append
+    outfile = open("/dev/aesdchar", O_WRONLY);
+    if (outfile == -1)
+#else
     outfile = fopen("/var/tmp/aesdsocketdata", "a");
     if (outfile == NULL)
+#endif
     {
-        syslog(LOG_ERR, "Unable to open temp file for writing.");
+        syslog(LOG_ERR, "Unable to output device for writing.");
         close(pti->peerfd);
-	pti->finished = true;
+        pti->finished = true;
         // release mutex
         pthread_mutex_unlock(&iomtx);
         return NULL;
@@ -75,10 +95,14 @@ void * aesdsocket_thread(void * arg)
     do 
     {
         bytesrcvd = recv(pti->peerfd, buffer, 1024, 0);
+#ifdef USE_AESD_CHAR_DEVICE
+        retval = write(outfile, buffer, bytesrcvd);
+#else
         retval = fwrite(buffer, 1, bytesrcvd, outfile);
+#endif
         if (retval != bytesrcvd)
         {
-            syslog(LOG_ERR, "Unable to write all data to temp file.");
+            syslog(LOG_ERR, "Unable to write all data to output device.");
             close(pti->peerfd);
 	    pti->finished = true;
             // release mutex
@@ -86,8 +110,13 @@ void * aesdsocket_thread(void * arg)
             return NULL;
         }
     } while (bytesrcvd == 1024);
+#ifdef USE_AESD_CHAR_DEVICE
+    close(outfile);
+    outfile = -1;
+#else
     fclose(outfile);
     outfile = NULL;
+#endif
     // Allow other threads to write to the file
     // release mutex
     pthread_mutex_unlock(&iomtx);
@@ -96,8 +125,14 @@ void * aesdsocket_thread(void * arg)
     // acquire mutex
     pthread_mutex_lock(&iomtx);
     // Transmit file back out.
+#ifdef USE_AESD_CHAR_DEVICE
+    // Open a file for append
+    outfile = open("/dev/aesdchar", O_RDONLY);
+    if (outfile == -1)
+#else
     outfile = fopen("/var/tmp/aesdsocketdata", "r");
     if (outfile == NULL)
+#endif
     {
         syslog(LOG_ERR, "Unable to open temp file for reading.");
         close(pti->peerfd);
@@ -108,7 +143,11 @@ void * aesdsocket_thread(void * arg)
     }
     do
     {
+#ifdef USE_AESD_CHAR_DEVICE
+        bytesrcvd = read(outfile, buffer, 1024);
+#else
         bytesrcvd = fread(buffer, 1, 1024, outfile);
+#endif
         retval = send(pti->peerfd, buffer, bytesrcvd, 0);
         if (retval != bytesrcvd)
         {
@@ -120,13 +159,20 @@ void * aesdsocket_thread(void * arg)
             return NULL;
         }
     } while (bytesrcvd == 1024);
+#ifdef USE_AESD_CHAR_DEVICE
+    close(outfile);
+    outfile = -1;
+#else
     fclose(outfile);
     outfile = NULL;
+#endif
     // release mutex
     pthread_mutex_unlock(&iomtx);
     close(pti->peerfd);
     return NULL;
 }
+
+#ifndef USE_AESD_CHAR_DEVICE
 void timer_callback(int sig)
 {
     time_t rawtime;
@@ -156,6 +202,7 @@ void timer_callback(int sig)
     outfile = NULL;
     pthread_mutex_unlock(&iomtx);
 }
+#endif
 
 int main(int argc, char* argv[])
 {
@@ -164,11 +211,13 @@ int main(int argc, char* argv[])
     socklen_t addrlen = 0;
     struct sigaction sa;
 
+#ifndef USE_AESD_CHAR_DEVICE
     // Deleting the file helps the full-test.sh complete.
     if (system("rm /var/tmp/aesdsocketdata") != 0)
     {
        syslog(LOG_ERR, "Unable to delete temp file,");
     }
+#endif
 
     // Handle the command line options
     if ((argc > 1) && (strcmp("-d", argv[1]) == 0))
@@ -197,8 +246,11 @@ int main(int argc, char* argv[])
         syslog(LOG_ERR, "Unable to register for SIGTERM.");
         return -1;
     }
+
+#ifndef USE_AESD_CHAR_DEVICE
     signal(SIGALRM, timer_callback);
     start_timer();
+#endif
 
     // Create a TCP socket
     sockfd = socket(PF_INET, SOCK_STREAM, 0);
