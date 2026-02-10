@@ -86,7 +86,7 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
     if (buffer->full == true)
     {
 	// We are losing a buffer. Free it.
-	kfree(buffer->entry[buffer->out_offs].buffptr);
+	//kfree(buffer->entry[buffer->out_offs].buffptr);
         if (buffer->out_offs == AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED-1)
             buffer->out_offs = 0;
         else
